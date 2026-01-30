@@ -2,29 +2,34 @@ import pyxel
 import math
 import random
 
+# Constants
 TILE = 8
 WIDTH_TILES = 20
-HEIGHT_TILES = 7
-WALL_PROB = 0.2  # 20% chance a tile becomes a wall
+HEIGHT_TILES = 15  # fill entire 120px height
+WALL_PROB = 0.1    # lower probability for random walls
 
+# Ghost class
 class Ghost:
     def __init__(self, x, y, color=8):
         self.x = x
         self.y = y
-        self.dir_x = random.choice([-1,0,1])
-        self.dir_y = random.choice([-1,0,1])
+        self.dir_x = random.choice([-1, 0, 1])
+        self.dir_y = random.choice([-1, 0, 1])
         self.color = color
         self.speed = 1
         self.alive = True
 
     def can_move(self, x, y, tilemap):
-        tile_x = x // TILE
-        tile_y = y // TILE
-        if tile_y < 0 or tile_y >= len(tilemap):
-            return False
-        if tile_x < 0 or tile_x >= len(tilemap[0]):
-            return False
-        return tilemap[tile_y][tile_x] == 0
+        # Check all 4 corners for collision
+        for dx in [0, TILE-1]:
+            for dy in [0, TILE-1]:
+                tile_x = (x + dx) // TILE
+                tile_y = (y + dy) // TILE
+                if tile_y < 0 or tile_y >= len(tilemap) or tile_x < 0 or tile_x >= len(tilemap[0]):
+                    return False
+                if tilemap[tile_y][tile_x] == 1:
+                    return False
+        return True
 
     def update(self, tilemap):
         if not self.alive:
@@ -46,10 +51,12 @@ class Ghost:
         if self.alive:
             pyxel.rect(self.x, self.y, TILE, TILE, self.color)
 
+# Main App
 class App:
     def __init__(self):
-        pyxel.init(160, 120, title="Pac-Man Random Maze")
+        pyxel.init(160, 120, title="Pac-Man Prototype")
         self.level = 1
+        self.score = 0
         self.generate_maze()
         self.x = 1 * TILE
         self.y = 1 * TILE
@@ -60,12 +67,15 @@ class App:
         self.speed = 1
 
         # Ghosts
-        self.ghosts = [Ghost(9*TILE, 3*TILE, color=8), Ghost(10*TILE, 3*TILE, color=12)]
+        self.ghosts = [
+            Ghost(9*TILE, 7*TILE, color=8),
+            Ghost(10*TILE, 7*TILE, color=12)
+        ]
 
         # Power-up
         self.powered_up = False
         self.power_timer = 0
-        self.power_duration = 5
+        self.power_duration = 5  # seconds
 
         pyxel.run(self.update, self.draw)
 
@@ -77,8 +87,8 @@ class App:
                 if x==0 or y==0 or x==WIDTH_TILES-1 or y==HEIGHT_TILES-1:
                     row.append(1)  # border
                 else:
-                    # Keep start area free
-                    if (x,y) in [(1,1),(2,1),(1,2)]:
+                    # Keep start area and exit free
+                    if (x,y) in [(1,1),(2,1),(1,2),(WIDTH_TILES-2, HEIGHT_TILES-2)]:
                         row.append(0)
                     else:
                         row.append(1 if random.random() < WALL_PROB else 0)
@@ -86,12 +96,11 @@ class App:
 
         # Food dots and power pellets
         self.dots = set()
-        self.power_pellets = set()
         for row_idx, row in enumerate(self.tilemap):
             for col_idx, tile in enumerate(row):
                 if tile == 0:
                     self.dots.add((col_idx*TILE + TILE//2, row_idx*TILE + TILE//2))
-        # Pick 4 random power pellets
+        # Random power pellets
         open_tiles = list(self.dots)
         self.power_pellets = set(random.sample(open_tiles, min(4, len(open_tiles))))
 
@@ -99,18 +108,22 @@ class App:
         return self.x % TILE == 0 and self.y % TILE == 0
 
     def can_move(self, x, y):
-        tile_x = x // TILE
-        tile_y = y // TILE
-        if tile_y < 0 or tile_y >= len(self.tilemap):
-            return False
-        if tile_x < 0 or tile_x >= len(self.tilemap[0]):
-            return False
-        return self.tilemap[tile_y][tile_x] == 0
+        # Check all corners
+        for dx in [0, TILE-1]:
+            for dy in [0, TILE-1]:
+                tile_x = (x + dx) // TILE
+                tile_y = (y + dy) // TILE
+                if tile_y < 0 or tile_y >= len(self.tilemap) or tile_x < 0 or tile_x >= len(self.tilemap[0]):
+                    return False
+                if self.tilemap[tile_y][tile_x] == 1:
+                    return False
+        return True
 
     def eat_dot(self):
         pac_center = (self.x + TILE//2, self.y + TILE//2)
         if pac_center in self.dots:
             self.dots.remove(pac_center)
+            self.score += 10
         if pac_center in self.power_pellets:
             self.power_pellets.remove(pac_center)
             self.powered_up = True
@@ -123,16 +136,19 @@ class App:
             if abs(self.x - ghost.x) < TILE and abs(self.y - ghost.y) < TILE:
                 if self.powered_up:
                     ghost.alive = False
+                    self.score += 50
                 else:
                     print("Pac-Man got caught!")
                     pyxel.quit()
 
     def update(self):
+        # Input
         if pyxel.btn(pyxel.KEY_LEFT): self.next_dir_x, self.next_dir_y = -1,0
         elif pyxel.btn(pyxel.KEY_RIGHT): self.next_dir_x, self.next_dir_y = 1,0
         elif pyxel.btn(pyxel.KEY_UP): self.next_dir_x, self.next_dir_y = 0,-1
         elif pyxel.btn(pyxel.KEY_DOWN): self.next_dir_x, self.next_dir_y = 0,1
 
+        # Turn when centered
         if self.is_centered():
             next_x = self.x + self.next_dir_x*self.speed
             next_y = self.y + self.next_dir_y*self.speed
@@ -140,25 +156,29 @@ class App:
                 self.dir_x = self.next_dir_x
                 self.dir_y = self.next_dir_y
 
+        # Move Pac-Man
         next_x = self.x + self.dir_x*self.speed
         next_y = self.y + self.dir_y*self.speed
         if self.can_move(next_x, next_y):
             self.x = next_x
             self.y = next_y
 
+        # Eat dots / power pellets
         self.eat_dot()
 
+        # Update ghosts
         for ghost in self.ghosts:
             ghost.update(self.tilemap)
 
+        # Collision with ghosts
         self.check_collision()
 
         # Power-up timer
         if self.powered_up:
-            if (pyxel.frame_count - self.power_timer)/30 >= 5:
+            if (pyxel.frame_count - self.power_timer)/30 >= self.power_duration:
                 self.powered_up = False
 
-        # Level up when dots cleared
+        # Level up
         if not self.dots:
             self.level += 1
             print(f"Level {self.level}!")
@@ -168,12 +188,13 @@ class App:
             for ghost in self.ghosts:
                 ghost.alive = True
                 ghost.x = 9*TILE
-                ghost.y = 3*TILE
+                ghost.y = 7*TILE
 
         if pyxel.btnp(pyxel.KEY_Q): pyxel.quit()
 
     def draw(self):
         pyxel.cls(0)
+
         # Draw walls
         for row_idx, row in enumerate(self.tilemap):
             for col_idx, tile in enumerate(row):
@@ -197,8 +218,9 @@ class App:
         elif self.dir_y==-1: start=-math.pi/2-mouth_open; end=-math.pi/2+mouth_open
         elif self.dir_y==1: start=math.pi/2-mouth_open; end=math.pi/2+mouth_open
         else: start=-mouth_open; end=mouth_open
-        pyxel.circ(cx,cy,pac_radius,10)
-        pyxel.tri(cx,cy,
+        color = 10 if not self.powered_up else 14
+        pyxel.circ(cx, cy, pac_radius, color)
+        pyxel.tri(cx, cy,
                   cx + pac_radius*math.cos(start),
                   cy + pac_radius*math.sin(start),
                   cx + pac_radius*math.cos(end),
@@ -208,5 +230,9 @@ class App:
         # Draw ghosts
         for ghost in self.ghosts:
             ghost.draw()
+
+        # Draw score and level
+        pyxel.text(5, 5, f"SCORE: {self.score}", 7)
+        pyxel.text(100, 5, f"LEVEL: {self.level}", 7)
 
 App()
