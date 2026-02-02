@@ -148,7 +148,7 @@ class App:
         })
 
     # =====================
-    # JOYSTICK
+    # JOYSTICK (UPDATED)
     # =====================
     def joystick_direction(self):
         self.joy_dx = self.joy_dy = 0
@@ -161,11 +161,14 @@ class App:
         dy = my - JOY_CENTER_Y
         dist = math.sqrt(dx*dx + dy*dy)
 
-        if dist > JOY_RADIUS:
+        # If the mouse is clicked but hasn't moved at all, avoid division by zero
+        if dist == 0:
             return None
 
-        self.joy_dx = dx / JOY_RADIUS
-        self.joy_dy = dy / JOY_RADIUS
+        # Normalize the direction so it's always between -1 and 1
+        # regardless of how far the mouse is
+        self.joy_dx = dx / dist
+        self.joy_dy = dy / dist
 
         angle = math.degrees(math.atan2(-dy, dx)) % 360
 
@@ -177,6 +180,17 @@ class App:
         if 247.5 <= angle < 292.5: return "down"
         if 292.5 <= angle < 337.5: return "down-right"
         return "right"
+
+    def draw_joystick(self):
+        # Draw the base
+        pyxel.circb(JOY_CENTER_X, JOY_CENTER_Y, JOY_RADIUS, 5)
+        
+        # Calculate visual knob position
+        # We use the normalized joy_dx/dy but cap it to the radius for drawing
+        kx = JOY_CENTER_X + int(self.joy_dx * (JOY_RADIUS - 2))
+        ky = JOY_CENTER_Y + int(self.joy_dy * (JOY_RADIUS - 2))
+        
+        pyxel.circ(kx, ky, JOY_KNOB_RADIUS, 10)
 
     # =====================
     # UPDATE
