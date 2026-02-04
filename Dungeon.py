@@ -97,7 +97,12 @@ class Enemy:
         self.move_timer = 0
         self.move_delay = 30  # frames between moves
         self.attack_cooldown = 0
-    
+        self.attacking = False  # Currently performing swipe attack
+        self.attack_timer = 0
+        self.attack_duration = 15  # frames swipe lasts
+        self.damage_cooldown = 0  # 1000ms = 60 frames (at 60fps)
+        self.damage_cooldown_time = 60
+        
     def get_enemy_row(self):
         """Math: Get sprite row based on direction and state"""
         rows = {
@@ -118,8 +123,32 @@ class Enemy:
         }
         return rows.get((self.dir, self.state), ENEMY_ROW_DOWN_IDLE)
     
+    def get_attack_pos(self):
+        """Get the tile position for the swipe attack (1 tile in front)"""
+        if self.dir == DIR_LEFT:
+            return (self.x - 1, self.y)
+        elif self.dir == DIR_RIGHT:
+            return (self.x + 1, self.y)
+        elif self.dir == DIR_UP:
+            return (self.x, self.y - 1)
+        elif self.dir == DIR_DOWN:
+            return (self.x, self.y + 1)
+        return (self.x, self.y)
+    
     def update(self, player_x, player_y, walls, enemies):
         if not self.alive:
+            return
+        
+        # Update damage cooldown
+        if self.damage_cooldown > 0:
+            self.damage_cooldown -= 1
+        
+        # Handle attack animation timer
+        if self.attacking:
+            self.attack_timer -= 1
+            if self.attack_timer <= 0:
+                self.attacking = False
+                self.state = STATE_IDLE
             return
         
         # Move towards player
@@ -139,6 +168,15 @@ class Enemy:
                 self.dir = DIR_UP
             elif player_y > self.y:
                 self.dir = DIR_DOWN
+            
+            # Check if player is 1 tile away - ATTACK!
+            dist = abs(player_x - self.x) + abs(player_y - self.y)
+            if dist == 1:
+                # Player is in attack range - SWIPE!
+                self.state = STATE_SWIPE
+                self.attacking = True
+                self.attack_timer = self.attack_duration
+                return
             
             # Try to move
             dx = dy = 0
@@ -178,6 +216,19 @@ class Enemy:
         if x < 0 or y < 0 or x >= MAP_W or y >= MAP_H:
             return True
         return (x, y) in walls
+    
+    def player_in_attack_range(self, px, py):
+        """Check if player is in the swipe attack zone"""
+        ax, ay = self.get_attack_pos()
+        return px == ax and py == ay
+    
+    def can_damage_player(self):
+        """Check if enemy can damage player (1000ms cooldown)"""
+        return self.damage_cooldown <= 0
+    
+    def reset_damage_cooldown(self):
+        """Reset damage cooldown after dealing damage"""
+        self.damage_cooldown = self.damage_cooldown_time
 
 
 class Game:
@@ -363,16 +414,24 @@ class Game:
                 self.enemies = [e for e in self.enemies if e.alive]
     
     def check_enemy_collisions(self):
-        """Check if player touched enemy"""
+        """Check if player is in enemy attack range"""
         for enemy in self.enemies:
-            if enemy.alive and self.px == enemy.x and self.py == enemy.y:
-                # Game over or damage
-                self.score -= 10
-                # Push enemy away
-                if enemy.x < self.px:
-                    enemy.x -= 1
-                else:
-                    enemy.x += 1
+            if enemy.alive:
+                # Check if player is on same tile (collision)
+                if self.px == enemy.x and self.py == enemy.y:
+                    if enemy.can_damage_player():
+                        self.score -= 10
+                        enemy.reset_damage_cooldown()
+                    # Push enemy away
+                    if enemy.x < self.px:
+                        enemy.x -= 1
+                    else:
+                        enemy.x += 1
+                # Check if player is in swipe attack zone
+                elif enemy.attacking and enemy.player_in_attack_range(self.px, self.py):
+                    if enemy.can_damage_player():
+                        self.score -= 5
+                        enemy.reset_damage_cooldown()
     
     def update_screen_pos(self):
         target_x = self.px * TILE
@@ -426,47 +485,58 @@ class Game:
     def draw(self):
         pyxel.cls(0)
         
-        # Draw floor with color
-        for y in range(MAP_H):
-            for x in range(MAP_W):
-                if (x, y) not in self.walls:
-                    pyxel.rect(x * TILE, y * TILE, TILE, TILE, COLOR_FLOOR)
+        # Draw tilemap with pixel dimensions
+        # bltm(x, y, tilemap_index, u, v, width, height)
+        # 16 tiles * 8 pixels = 128 pixels
+        pyxel.bltm(0, 0, 0, 0, 0, MAP_W * TILE, MAP_H * TILE)
         
-        # Draw walls with colors
-        for (wx, wy) in self.walls:
-            # Border walls
-            if wx == 0 or wx == MAP_W - 1 or wy == 0 or wy == MAP_H - 1:
-                color = COLOR_BORDER
-            elif (wx + wy) % 2 == 0:
-                color = COLOR_WALL
-            else:
-                color = COLOR_WALL2
-            pyxel.rect(wx * TILE, wy * TILE, TILE, TILE, color)
-        
-        # Draw pellets
+        # Draw pellets with sprite texture
         for (px, py) in self.pellet_positions:
-            pyxel.circ(px * TILE + TILE // 2, py * TILE + TILE // 2, 2, COLOR_PELLET)
+            sx = SPRITE_PELLET * TILE
+            sy = SPRITE_PELLET * TILE
+            pyxel.blt(px * TILE, py * TILE, IMG_WORLD, sx, sy, TILE, TILE, 0)
         
-        # Draw portal if active (pulsing circle)
+        # Draw portal if active with sprite
         if self.portal_active:
-            frame = (pyxel.frame_count // 8) % 4
-            pulse = frame * 2
-            # Outer ring
-            pyxel.circ(self.portal_x * TILE + TILE // 2, self.portal_y * TILE + TILE // 2, 
-                      3 + pulse, COLOR_PORTAL)
-            # Inner circle
-            pyxel.circ(self.portal_x * TILE + TILE // 2, self.portal_y * TILE + TILE // 2, 
-                      2, 7)
+            frame = (pyxel.frame_count // 8) % PORTAL_FRAMES
+            portal_rows = [SPRITE_PORTAL_FRONT, SPRITE_PORTAL_LEFT, SPRITE_PORTAL_RIGHT]
+            portal_row = portal_rows[self.update_portal_dir()]
+            sx = (MAP2_OFFSET + frame) * TILE
+            sy = portal_row * TILE
+            pyxel.blt(self.portal_x * TILE, self.portal_y * TILE, IMG_WORLD, sx, sy, TILE, TILE, 0)
         
         # Draw enemies
         for enemy in self.enemies:
             if enemy.alive:
+                # Draw swipe attack if attacking (separate from enemy sprite)
+                if enemy.attacking:
+                    ax, ay = enemy.get_attack_pos()
+                    frame = (enemy.attack_timer // 4) % 4
+                    swipe_row = {
+                        DIR_UP: ENEMY_ROW_UP,
+                        DIR_DOWN: ENEMY_ROW_DOWN_SWIPE,
+                        DIR_LEFT: ENEMY_ROW_LEFT_SWIPE,
+                        DIR_RIGHT: ENEMY_ROW_RIGHT_SWIPE,
+                    }
+                    row = swipe_row.get(enemy.dir, ENEMY_ROW_DOWN_SWIPE)
+                    u = frame * TILE
+                    v = row * TILE
+                    pyxel.blt(ax * TILE, ay * TILE, IMG_ENEMY, u, v, TILE, TILE, 0)
+                
+                # Draw enemy sprite (keeps idle/walk sprite while attacking)
                 if enemy.state == STATE_WALK:
                     frame = (pyxel.frame_count // 6) % 4
                 else:
                     frame = 0
                 
-                row = enemy.get_enemy_row()
+                # Get row based on direction (idle animation only, no attack sprite on enemy)
+                row = {
+                    DIR_UP: ENEMY_ROW_UP,
+                    DIR_DOWN: ENEMY_ROW_DOWN_IDLE,
+                    DIR_LEFT: ENEMY_ROW_LEFT_IDLE,
+                    DIR_RIGHT: ENEMY_ROW_RIGHT_IDLE,
+                }.get(enemy.dir, ENEMY_ROW_DOWN_IDLE)
+                
                 u = frame * TILE
                 v = row * TILE
                 
